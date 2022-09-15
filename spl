@@ -1,0 +1,138 @@
+[Distributable Streaming Search]
+index=bigdata
+
+[Centralized Streaming Search]
+index=bigdata
+| streamstats count
+
+[Transforming Search]
+index=bigdata
+| stats count
+
+[Search Filter: mac_id]
+index=bigdata mac_id=000:001:004:30:17:001
+
+[Search Filter: station_id]
+index=bigdata station_id=X209019
+
+[Search Filter: area_id]
+index=bigdata area_id=88
+
+[Search Filter: TERM(mac_id)]
+index=bigdata TERM(mac_id=000:001:004:30:17:001)
+
+[Search Filter: TERM(station_id)]
+index=bigdata TERM(station_id=X209019)
+
+[Search Filter: TERM(area_id)]
+index=bigdata TERM(area_id=88)
+
+[Search Filter: indexed extration: mac_id]
+index=bigdata_idx mac_id::000:001:004:30:17:001
+
+[Search Filter: indexed extration: station_id]
+index=bigdata_idx station_id::X209019
+
+[Search Filter: indexed extration: area_id]
+index=bigdata_idx area_id::88
+
+[dbinspect]
+| dbinspect index=bigdata*
+| stats count as num_buckets sum(sizeOnDiskMB) as sizeOnDiskMB by index
+| eval sizeOnDiskGB = round(sizeOnDiskMB/1024, 2)
+| fields index num_buckets sizeOnDiskGB
+
+[Field Aggregation: distributable streaming search: schema on the fly]
+index=bigdata station_id=x209019
+| eval dl_gbytes = (dl_mbyte/1024)
+
+[Field Aggregation: distributable streaming search: schema at write]
+index=bigdata_idx station_id::x209019
+| eval dl_gbytes = (dl_mbyte/1024)
+
+[Field Aggregation: centralized streaming search: schema on the fly]
+index=bigdata station_id=x209019 
+| streamstats avg(dl_mbyte)
+
+[Field Aggregation: centralized streaming search: schema at write]
+index=bigdata_idx station_id::x209019
+| streamstats avg(dl_mbyte)
+
+[Field Aggregation: transforming search: schema on the fly]
+index=bigdata station_id=x209019 
+| stats avg(dl_mbyte)
+
+[Field Aggregation: transforming search: schema at write]
+index=bigdata_idx station_id::x209019
+| stats avg(dl_mbyte)
+
+[Acceleration: schema on the fly]
+index=bigdata 
+| stats avg(dl_mbyte) by area_id
+
+[Acceleration: schema at write]
+| tstats avg(dl_mbyte) where index=bigdata_idx by area_id summariesonly=t
+
+[Acceleration: DMA]
+| tstats avg(bigdata_traffic.dl_mbyte) from datamodel=DM_bigdata_traffic_dl_mbyte by bigdata_traffic.area_id
+
+[Load Job]
+| loadjob 1663231733.900
+
+[Batch Mode Search]
+index=bigdata station_id=x209019 
+| stats avg(dl_mbyte)
+
+[None-Batch Mode Search]
+index=bigdata station_id=x209019
+| eval dl_gbytes = (dl_mbyte/1024)
+
+[MapReduce Good]
+index=bigdata area_id=88 
+| fields mac_id frequency max_users dl_user_thp_mbps 
+| eval total_bandwidth = dl_user_thp_mbps * max_users 
+| stats count avg(total_bandwidth) by frequency
+| noop search_optimization=false
+
+[MapReduce Bad]
+index=bigdata area_id=88 
+| table mac_id frequency max_users dl_user_thp_mbps 
+| eval total_bandwidth = dl_user_thp_mbps * max_users 
+| stats count avg(total_bandwidth) by frequency
+| noop search_optimization=false
+
+[Concatenate multiple data sources: _audit]
+index=_audit sourcetype=audittrail search_id!="rsa_*" action=search earliest=-7d@d
+| rex "search='(?<search_text>[\S\s]+)('(, autojoin|\]\[n\/a\])|'\]$)"
+| eval search_text = if(isnull(search_text), search, search_text)
+| table search_id total_run_time scan_count event_count search_text
+
+[Concatenate multiple data sources: _introspection]
+index=_introspection sourcetype=splunk_resource_usage data.search_props.sid::* component=PerProcess earliest=-7d@d
+| table data.search_props.sid data.pct_cpu data.pct_memory
+
+[Concatenate multiple data sources: join]
+index=_audit sourcetype=audittrail search_id!="rsa_*" action=search info=completed earliest=-7d@d
+| rex "search='(?<search_text>[\S\s]+)('(, autojoin|\]\[n\/a\])|'\]$)" 
+| eval search_text = if(isnull(search_text), search, search_text) 
+| rex field=search_id "'(?<search_id>[^']+)" 
+| join search_id type=left
+    [ search index=_introspection sourcetype=splunk_resource_usage data.search_props.sid::* component=PerProcess earliest=-7d@d
+    | rename data.search_props.sid as search_id ]
+| table search_id total_run_time scan_count event_count search_text data.pct_cpu data.pct_memory
+
+[Concatenate multiple data sources: stats]
+(index=_audit sourcetype=audittrail search_id!="rsa_*" action=search info=completed) OR
+(index=_introspection sourcetype=splunk_resource_usage data.search_props.sid::* component=PerProcess) earliest=-7d@d
+| rex "search='(?<search_text>[\S\s]+)('(, autojoin|\]\[n\/a\])|'\]$)" 
+| eval search_text = if(isnull(search_text), search, search_text) 
+| rex field=search_id "'(?<search_id>[^']+)"
+| eval search_id = if(isnull(search_id), 'data.search_props.sid', search_id)
+| stats first(total_run_time) first(scan_count) first(event_count) first(search_text) first(data.pct_cpu) first(data.pct_memory) by search_id
+| rename first(*) as *
+
+
+
+
+
+
